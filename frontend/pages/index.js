@@ -1,85 +1,113 @@
 import { useState } from "react";
 import { useMutation } from "react-query";
-import { Box, Button, Textarea, Text } from "@chakra-ui/react";
-import { createConversation, generateCode } from "../utils/api";
-import axios from "axios";
+import { Box, Button, Textarea, Text, Spinner } from "@chakra-ui/react";
+import { createConversation, generateCode, startDeployment } from "../utils/api";
 import ActivityLog from "../components/ActivityLog";
 
 export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [codeData, setCodeData] = useState(null);
+  const [conversationId, setConversationId] = useState(null);
   const [deploymentId, setDeploymentId] = useState(null);
 
-  // React Query mutation for generating code
-  const { mutate: getCode } = useMutation(generateCode, {
+  // 1. React Query mutation for creating a conversation
+  const {
+    mutate: doStartConversation,
+    isLoading: isCreatingConversation,
+  } = useMutation(createConversation, {
+    onSuccess: (res) => {
+      setConversationId(res.conversation_id);
+      // Then automatically call generateCode
+      doGenerateCode({ conversation_id: res.conversation_id, prompt });
+    },
+  });
+
+  // 2. React Query mutation for generating code
+  const {
+    mutate: doGenerateCode,
+    isLoading: isGeneratingCode,
+  } = useMutation(generateCode, {
     onSuccess: (data) => {
       setCodeData(data.generated_code);
     },
   });
 
-  // React Query mutation for creating a conversation
-  const { mutate: startConversation } = useMutation(createConversation, {
+  // 3. React Query mutation for starting the orchestrator deployment
+  const {
+    mutate: doStartDeployment,
+    isLoading: isStartingDeployment,
+  } = useMutation(startDeployment, {
     onSuccess: (res) => {
-      // Once conversation is created, automatically call generateCode
-      getCode({ conversation_id: res.conversation_id, prompt });
+      setDeploymentId(res.deployment_id);
+    },
+    onError: (err) => {
+      console.error("Error starting deployment:", err);
+      alert("Deployment failed to start. Check console for details.");
     },
   });
 
-  // Step 1: User enters prompt, we create a conversation and generate code
+  // Called when user clicks "Generate"
   const handleSubmit = () => {
-    startConversation({ messages: [{ role: "user", content: prompt }] });
+    // Reset old data
+    setCodeData(null);
+    setConversationId(null);
+    setDeploymentId(null);
+
+    // Start new conversation
+    doStartConversation({ messages: [{ role: "user", content: prompt }] });
   };
 
-  // Step 2: Once code is generated, user can start the automated deployment
-  const handleStartDeployment = async () => {
-    if (!codeData) {
+  // Called when user clicks "Start Automated Deployment"
+  const handleStartDeployment = () => {
+    if (!conversationId || !codeData) {
       alert("Generate code first before deployment!");
       return;
     }
-
-    // In reality, you’d use the real conversation_id returned from createConversation()
-    // Below is a placeholder if you're not storing that ID yet
-    const conversationId = "some-conversation-id";
-
-    try {
-      const res = await axios.post("http://localhost:8000/deployments/start", {
-        conversation_id: conversationId,
-        app_name: "my-app",
-        max_iterations: 3,
-      });
-      setDeploymentId(res.data.deployment_id);
-    } catch (err) {
-      console.error("Error starting deployment:", err);
-      alert("Deployment failed to start. Check console for details.");
-    }
+    doStartDeployment({
+      conversation_id: conversationId,
+      app_name: "my-app",
+      max_iterations: 3,
+    });
   };
+
+  // You can show a loading spinner for any of these states
+  const isLoadingAny = isCreatingConversation || isGeneratingCode || isStartingDeployment;
 
   return (
     <Box>
-      {/* Textarea for user’s prompt */}
+      {/* Prompt input */}
       <Textarea
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         placeholder="Describe your app idea..."
       />
-      <Button mt={4} onClick={handleSubmit} colorScheme="orange">
-        Generate
+      <Button mt={4} onClick={handleSubmit} colorScheme="orange" disabled={isLoadingAny}>
+        {isLoadingAny ? "Working..." : "Generate"}
       </Button>
 
-      {/* Display generated code */}
+      {/* Loading feedback if desired */}
+      {isLoadingAny && (
+        <Box mt={4}>
+          <Spinner size="lg" color="orange.300" />
+          <Text mt={2} color="orange.100">
+            Please wait while we process your request...
+          </Text>
+        </Box>
+      )}
+
+      {/* Show generated code and deploy button */}
       {codeData && (
         <Box mt={4} p={4} bg="gray.700" color="white">
           <Text fontWeight="bold">Generated Code:</Text>
           <pre>{codeData}</pre>
 
-          {/* Button to start the new orchestrator-based deployment */}
-          <Button mt={4} onClick={handleStartDeployment} colorScheme="teal">
-            Start Automated Deployment
+          <Button mt={4} onClick={handleStartDeployment} colorScheme="teal" disabled={isStartingDeployment}>
+            {isStartingDeployment ? "Deploying..." : "Start Automated Deployment"}
           </Button>
         </Box>
       )}
 
-      {/* Once deployment starts, show real-time logs */}
+      {/* Real-time logs once deployment starts */}
       {deploymentId && (
         <Box mt={4}>
           <ActivityLog deploymentId={deploymentId} />

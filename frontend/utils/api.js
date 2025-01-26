@@ -1,17 +1,52 @@
 import axios from "axios";
 
-// Adjust the baseURL as needed (localhost or real domain)
 const apiClient = axios.create({
   baseURL: "http://localhost:8000",
 });
 
-apiClient.interceptors.request.use((config) => {
-  const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+// Attach interceptors (as you already have)
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem("access_token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    console.log("[API] Request:", {
+      method: config.method,
+      url: config.url,
+      headers: config.headers,
+      data: config.data,
+    });
+    return config;
+  },
+  (error) => {
+    console.error("[API] Request error:", error);
+    return Promise.reject(error);
   }
-  return config;
-});
+);
+
+apiClient.interceptors.response.use(
+  (response) => {
+    console.log("[API] Response:", {
+      status: response.status,
+      url: response.config.url,
+      data: response.data,
+    });
+    return response;
+  },
+  (error) => {
+    if (error.response) {
+      console.error("[API] Response error:", {
+        status: error.response.status,
+        url: error.config.url,
+        data: error.response.data,
+      });
+    } else {
+      console.error("[API] Unexpected error:", error);
+    }
+    return Promise.reject(error);
+  }
+);
 
 export async function createConversation(payload) {
   const { data } = await apiClient.post("/conversations", payload);
@@ -23,15 +58,16 @@ export async function generateCode(payload) {
   return data;
 }
 
-export async function getConversations() {
-  const { data } = await apiClient.get("/conversations");
+export async function startDeployment(payload) {
+  // The all-important function for orchestrator
+  const { data } = await apiClient.post("/deployments/start", payload);
   return data;
 }
 
 export async function loginUser(payload) {
   const { data } = await apiClient.post("/auth/login", payload);
-  // Store token in localStorage
   localStorage.setItem("access_token", data.access_token);
+  console.log("[API] loginUser stored token:", data.access_token);
   return data;
 }
 
