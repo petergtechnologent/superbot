@@ -24,10 +24,11 @@ async def run_deployment_pipeline(deployment_id: str):
     """
     Orchestrates:
       1. Generate or fix code
-      2. Docker build
-      3. Docker run
-      4. If container fails, feed logs to AI to fix code
-      5. Repeat until success or max_iterations
+      2. Docker build ephemeral-test-image
+      3. Docker run ephemeral container in the same Docker network as 'backend'
+      4. Health check by calling http://{container_name}:{port}
+      5. If trouble_mode=False, remove container on failure. Otherwise keep it running.
+      6. Repeat until success or max_iterations
     """
     logger.debug(f"[Orchestrator] Starting pipeline for deployment {deployment_id}")
     deployment = await db["deployments"].find_one({"_id": ObjectId(deployment_id)})
@@ -38,12 +39,14 @@ async def run_deployment_pipeline(deployment_id: str):
     conversation_id = deployment["conversation_id"]
     iteration = deployment.get("iteration", 0)
     max_iterations = deployment.get("max_iterations", 5)
-    app_type = deployment.get("app_type", "script")
+    target_port = deployment.get("port_number", 9000)
+    trouble_mode = deployment.get("trouble_mode", False)
 
     await update_deployment_field(deployment_id, {"status": "in_progress"})
 
     build_dir = f"/tmp/build_{deployment_id}_{uuid.uuid4().hex}"
     os.makedirs(build_dir, exist_ok=True)
+
     last_code_snippets = None
     last_logs = ""
 
@@ -52,9 +55,7 @@ async def run_deployment_pipeline(deployment_id: str):
         await append_log(deployment_id, f"Iteration #{iteration} started.")
         await update_deployment_field(deployment_id, {"iteration": iteration})
 
-        # -------------------------------
-        # (A) Load conversation doc
-        # -------------------------------
+        # 1) Load conversation doc
         conversation = await db["conversations"].find_one({"_id": ObjectId(conversation_id)})
         if not conversation:
             await append_log(deployment_id, "Conversation doc not found. Aborting orchestrator.")
@@ -63,30 +64,15 @@ async def run_deployment_pipeline(deployment_id: str):
 
         conversation_messages = conversation.get("messages", [])
 
-        # -------------------------------
-        # (A0) Plan Step
-        # Pass last iteration logs to help the AI revise
-        # -------------------------------
-        plan_prompt = f"""
-You are the planning assistant. 
-Here are logs from the previous iteration (if any):
-{last_logs[:3000]}  <-- truncated for safety
-
-If there's a syntax error or container crash, fix it. Provide a bullet-list plan.
+        # 2) Multi-turn code generation
+        system_msg = {
+            "role": "system",
+            "content": f"""
+You must produce a Python FastAPI app that listens on 0.0.0.0:{target_port}.
+Return JSON mapping filenames->file contents. The Dockerfile must run:
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{target_port}"].
 """
-
-        plan_text = await call_ai_for_plan(conversation_messages, plan_prompt)
-        if plan_text:
-            await append_log(deployment_id, f"AI Plan (Iteration {iteration}):\n{plan_text}")
-            await add_message_to_conversation_internal(
-                conversation_id,
-                {"role": "assistant", "content": plan_text}
-            )
-
-        # -------------------------------
-        # (B) Generate or fix code (Multi-turn)
-        # -------------------------------
-        system_msg = _build_system_msg_for_app_type(app_type)
+        }
         code_dict, raw_attempts = await call_ai_for_code_with_raw(
             conversation_messages=conversation_messages,
             system_messages=[system_msg]
@@ -98,23 +84,20 @@ If there's a syntax error or container crash, fix it. Provide a bullet-list plan
             await update_deployment_field(deployment_id, {"status": "error"})
             break
 
-        # Avoid infinite loop if code is repeated
         if code_dict == last_code_snippets:
-            await append_log(deployment_id, "AI returned the same code as last iteration. Aborting.")
+            await append_log(deployment_id, "AI returned identical code. Aborting to avoid loop.")
             await update_deployment_field(deployment_id, {"status": "error"})
             break
         last_code_snippets = code_dict
 
-        # Save code as an assistant message
+        # Save the code as an assistant message
         import json
         code_text = json.dumps(code_dict, indent=2)
         await add_message_to_conversation_internal(
             conversation_id, {"role": "assistant", "content": code_text}
         )
 
-        # -------------------------------
-        # (C) Docker Build
-        # -------------------------------
+        # 3) Docker build ephemeral-test-image
         try:
             write_code_to_directory(code_dict, build_dir)
             await append_log(deployment_id, f"Code written to {build_dir}")
@@ -125,7 +108,7 @@ If there's a syntax error or container crash, fix it. Provide a bullet-list plan
 
         build_ok, build_logs = await docker_build(build_dir)
         await append_log(deployment_id, build_logs)
-        last_logs = build_logs  # let plan step see build logs next iteration
+        last_logs = build_logs
 
         if not build_ok:
             # Attempt fix
@@ -134,27 +117,31 @@ If there's a syntax error or container crash, fix it. Provide a bullet-list plan
                 break
             continue
 
-        # -------------------------------
-        # (D) Docker Run
-        # -------------------------------
-        if app_type == "script":
-            run_ok, run_logs = await docker_run_script_check()
-        else:
-            run_ok, run_logs = await docker_run_server_check_host()
-
-        # We always append the run logs
+        # 4) Docker run ephemeral container
+        run_ok, run_logs, container_id = await docker_run_server_check_host(
+            deployment_id=deployment_id,
+            port=target_port,
+            trouble_mode=trouble_mode
+        )
         await append_log(deployment_id, run_logs)
-        # let next iteration see them
         last_logs = run_logs
 
         if not run_ok:
-            fix_ok = await fix_code_with_logs(deployment_id, conversation_id, run_logs)
-            if not fix_ok:
+            if trouble_mode:
+                await append_log(
+                    deployment_id,
+                    f"Trouble mode is ON: Container {container_id} left running for debugging."
+                )
+                await update_deployment_field(deployment_id, {"status": "error"})
                 break
-            continue
+            else:
+                fix_ok = await fix_code_with_logs(deployment_id, conversation_id, run_logs)
+                if not fix_ok:
+                    break
+                continue
 
-        # If container is healthy => success
-        await append_log(deployment_id, "Deployment succeeded.")
+        # success
+        await append_log(deployment_id, f"Service is accessible on port {target_port}. SUCCESS!")
         await update_deployment_field(deployment_id, {"status": "success"})
         break
 
@@ -164,26 +151,6 @@ If there's a syntax error or container crash, fix it. Provide a bullet-list plan
     if final_doc and final_doc["status"] not in ("success", "error"):
         await append_log(deployment_id, "Max iterations reached. Marking as error.")
         await update_deployment_field(deployment_id, {"status": "error"})
-
-
-def _build_system_msg_for_app_type(app_type: str):
-    """
-    Returns a system message dict depending on whether we're building a script or server.
-    """
-    if app_type == "script":
-        content = """
-You must produce a Python script that exits code 0 upon completion.
-Include Dockerfile + requirements.txt if needed.
-No extra text, only valid JSON filenames->contents.
-"""
-    else:
-        content = """
-You must produce a Python-based web server that listens on 0.0.0.0:5000 indefinitely.
-Pin Flask (e.g., Flask==2.2.3). Return valid JSON mapping filenames->contents. 
-No extra text or code fences.
-"""
-
-    return {"role": "system", "content": content}
 
 
 async def docker_build(build_dir: str):
@@ -197,136 +164,89 @@ async def docker_build(build_dir: str):
     return (rc == 0), f"Build Logs:\n{logs}"
 
 
-async def docker_run_script_check():
+async def docker_run_server_check_host(deployment_id: str, port: int, trouble_mode: bool):
     """
-    1) Start the container in detached mode
-    2) Immediately fetch logs
-    3) Sleep 6s, check if running
-    4) If still running => fail (script shouldn't keep running)
-    5) If not running => check exit code & final logs
+    1) Create a container name = ephemeral-test-container-{deployment_id}.
+    2) Run ephemeral-test-image in the same Docker network as 'backend' (superbot_default),
+       but also publish the port to the host (so you can access it at http://localhost:<port>).
+    3) Wait 12s, then call http://{container_name}:{port} from inside the docker network.
+    4) If container fails or times out, remove it unless trouble_mode=True.
     """
-    run_cmd = "docker run -d --name ephemeral-test-container ephemeral-test-image"
+    container_name = f"ephemeral-test-container-{deployment_id}"
+
+    # First remove any old container with the same name, if it exists
+    rm_old = f"docker rm -f {container_name}"
+    await asyncio.create_subprocess_shell(rm_old)
+
+    # IMPORTANT CHANGE: add -p {port}:{port} for external access
+    run_cmd = (
+        f"docker run -d --name {container_name} "
+        f"--network=superbot_default "
+        f"-p {port}:{port} "  # <--- This ensures you can access it from host at localhost:<port>
+        "ephemeral-test-image"
+    )
+
     proc = await asyncio.create_subprocess_shell(
         run_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     stdout, stderr = await proc.communicate()
-    container_id = stdout.decode().strip()
+
+    new_container_id = stdout.decode().strip()
     error_text = stderr.decode().strip()
+    if not new_container_id:
+        return (False, f"Container run error:\n{error_text}", "")
 
-    if not container_id:
-        # If container didn't start, we have no ID => see error_text
-        return False, f"Container run error:\n{error_text}"
+    # Grab initial logs
+    initial_logs = await _grab_container_logs(new_container_id)
 
-    # Force fetch logs immediately in case the container already exited with a syntax error
-    initial_logs = await _grab_container_logs(container_id)
-
-    # Sleep 6 seconds
-    await asyncio.sleep(6)
-
-    # Inspect to see if still running
-    inspect_cmd = f"docker inspect --format='{{{{.State.Running}}}}' {container_id}"
-    proc_inspect = await asyncio.create_subprocess_shell(
-        inspect_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    inspect_out, _ = await proc_inspect.communicate()
-    is_running = inspect_out.decode().strip()
-
-    # Grab final logs
-    final_logs = await _grab_container_logs(container_id)
-    logs_combined = f"Immediate Logs:\n{initial_logs}\n\nFinal Logs:\n{final_logs}"
-
-    # Remove the container
-    rm_cmd = f"docker rm -f {container_id}"
-    await asyncio.create_subprocess_shell(rm_cmd)
-
-    if is_running.lower() == "true":
-        # If it's still running => fail (script should have exited)
-        return False, f"Script is still running after 6s.\n{logs_combined}"
-
-    # If not running => check exit code
-    ec_cmd = f"docker inspect --format='{{{{.State.ExitCode}}}}' {container_id}"
-    proc_ec = await asyncio.create_subprocess_shell(
-        ec_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    ec_out, _ = await proc_ec.communicate()
-    exit_code = ec_out.decode().strip()
-
-    if exit_code == "0":
-        return True, f"Container exited code 0.\n{logs_combined}"
-    else:
-        return False, f"Container exited code {exit_code}.\n{logs_combined}"
-
-
-async def docker_run_server_check_host():
-    """
-    1) Start container in detached mode, random host port
-    2) Immediately fetch logs
-    3) Sleep 12s, see if it's running
-    4) If not running => gather logs & fail
-    5) If running => do an HTTP GET => success or fail
-    """
-    host_port = random.randint(20000, 30000)
-    run_cmd = f"docker run -d --name ephemeral-test-container -p {host_port}:5000 ephemeral-test-image"
-    proc = await asyncio.create_subprocess_shell(
-        run_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await proc.communicate()
-    container_id = stdout.decode().strip()
-    error_text = stderr.decode().strip()
-
-    if not container_id:
-        return False, f"Container run error:\n{error_text}"
-
-    # Immediately fetch logs in case of early exit
-    initial_logs = await _grab_container_logs(container_id)
-
-    # Sleep 12 seconds
+    # Wait 12 seconds for the server to (hopefully) come up
     await asyncio.sleep(12)
 
-    # Check if running
-    inspect_cmd = f"docker inspect --format='{{{{.State.Running}}}}' {container_id}"
+    # Check if container is still running
+    inspect_cmd = f"docker inspect --format='{{{{.State.Running}}}}' {new_container_id}"
     proc_inspect = await asyncio.create_subprocess_shell(
         inspect_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     inspect_out, _ = await proc_inspect.communicate()
-    is_running = inspect_out.decode().strip()
+    is_running = inspect_out.decode().strip().lower()
 
-    # Grab final logs
-    final_logs = await _grab_container_logs(container_id)
+    final_logs = await _grab_container_logs(new_container_id)
     logs_combined = f"Immediate Logs:\n{initial_logs}\n\nFinal Logs:\n{final_logs}"
 
-    if is_running.lower() != "true":
-        # Container has exited => fail
-        rm_cmd = f"docker rm -f {container_id}"
-        await asyncio.create_subprocess_shell(rm_cmd)
-        return False, f"Container exited unexpectedly.\n{logs_combined}"
+    if is_running != "true":
+        msg = f"Container exited unexpectedly.\n{logs_combined}"
+        if not trouble_mode:
+            rm_cmd = f"docker rm -f {new_container_id}"
+            await asyncio.create_subprocess_shell(rm_cmd)
+        return (False, msg, new_container_id)
 
-    # If still running => do an HTTP GET
+    # Attempt HTTP GET from inside the Docker network
     try:
-        resp = requests.get(f"http://127.0.0.1:{host_port}", timeout=4)
+        url = f"http://{container_name}:{port}/"
+        resp = requests.get(url, timeout=4)
         if resp.status_code == 200:
-            msg = f"Received HTTP 200 from container on port {host_port}\n{logs_combined}"
-            # Cleanup container
-            rm_cmd = f"docker rm -f {container_id}"
-            await asyncio.create_subprocess_shell(rm_cmd)
-            return True, msg
+            # success => remove container if not trouble_mode
+            rm_msg = ""
+            if not trouble_mode:
+                rm_cmd = f"docker rm -f {new_container_id}"
+                await asyncio.create_subprocess_shell(rm_cmd)
+                rm_msg = f"Removed container {new_container_id} after success.\n"
+            return (True, f"{rm_msg}HTTP 200 OK on {url}\n{logs_combined}", new_container_id)
         else:
-            # It's running but returned non-200
-            rm_cmd = f"docker rm -f {container_id}"
-            await asyncio.create_subprocess_shell(rm_cmd)
-            return False, f"Health check failed: {resp.status_code}\n{logs_combined}"
+            msg = f"Service returned {resp.status_code} at {url}\n{logs_combined}"
+            if not trouble_mode:
+                rm_cmd = f"docker rm -f {new_container_id}"
+                await asyncio.create_subprocess_shell(rm_cmd)
+            return (False, msg, new_container_id)
     except Exception as e:
-        # Possibly connection refused or something else
-        rm_cmd = f"docker rm -f {container_id}"
-        await asyncio.create_subprocess_shell(rm_cmd)
-        return False, f"Error making HTTP request: {str(e)}\n{logs_combined}"
+        msg = f"Error calling {url}: {str(e)}\n{logs_combined}"
+        if not trouble_mode:
+            rm_cmd = f"docker rm -f {new_container_id}"
+            await asyncio.create_subprocess_shell(rm_cmd)
+        return (False, msg, new_container_id)
 
 
 async def _grab_container_logs(container_id: str) -> str:
-    """
-    Helper function to always grab entire container logs, 
-    even if the container exited immediately.
-    """
     logs_cmd = f"docker logs {container_id}"
     proc_logs = await asyncio.create_subprocess_shell(
         logs_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -346,12 +266,10 @@ def write_code_to_directory(code_snippets: dict, build_dir: str):
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
+
 async def append_log(deployment_id: str, new_log: str):
     logger.info(f"[Deployment {deployment_id}] {new_log}")
-    from datetime import datetime
-    from bson import ObjectId
     from app.api.ws import broadcast_log
-
     await db["deployments"].update_one(
         {"_id": ObjectId(deployment_id)},
         {
@@ -360,6 +278,7 @@ async def append_log(deployment_id: str, new_log: str):
         }
     )
     await broadcast_log(deployment_id, new_log)
+
 
 async def update_deployment_field(deployment_id: str, fields: dict):
     from datetime import datetime

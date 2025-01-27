@@ -9,34 +9,57 @@ import {
   Input,
   Flex,
   Spinner,
-  Select
+  Checkbox,
 } from "@chakra-ui/react";
-import { createConversation, generateCode, startDeployment } from "../utils/api";
+import {
+  transformFlexSpec,
+  createConversation,
+  generateCode,
+  startDeployment,
+} from "../utils/api";
 import ActivityLog from "../components/ActivityLog";
 
 export default function Home() {
-  const [prompt, setPrompt] = useState("");
-  const [codeData, setCodeData] = useState(null);
-  const [deploymentId, setDeploymentId] = useState(null);
-  const [conversationId, setConversationId] = useState(null);
-
-  // Max Iterations input
+  const [userIdea, setUserIdea] = useState("");
+  const [flexPort, setFlexPort] = useState("9000");
   const [maxIterations, setMaxIterations] = useState(5);
+  const [troubleMode, setTroubleMode] = useState(false);
+  const [persistOnSuccess, setPersistOnSuccess] = useState(false); // NEW
 
-  // "script" vs "server"
-  const [appType, setAppType] = useState("script");
+  const [conversationId, setConversationId] = useState(null);
+  const [deploymentId, setDeploymentId] = useState(null);
+  const [codeData, setCodeData] = useState(null);
 
-  // Loading states
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
 
-  // 1) Create conversation => on success => generate code
-  const { mutate: doStartConversation } = useMutation(createConversation, {
+  // 1) Transform user input => Flex Spec
+  const { mutate: doTransformSpec, isLoading: isTransformLoading } = useMutation(
+    transformFlexSpec,
+    {
+      onSuccess: (spec) => {
+        // 2) Create a conversation with that spec
+        const specMessage = {
+          role: "user",
+          content: JSON.stringify(spec, null, 2),
+        };
+        doCreateConversation({ messages: [specMessage] });
+      },
+      onError: () => {
+        setIsGenerating(false);
+        alert("Error converting input into a Flex Spec!");
+      },
+    }
+  );
+
+  // 2) Create conversation => on success => generate code
+  const { mutate: doCreateConversation } = useMutation(createConversation, {
     onSuccess: (res) => {
-      console.log("Created conversation ID:", res.conversation_id);
       setConversationId(res.conversation_id);
-      // then generate code
-      doGenerateCode({ conversation_id: res.conversation_id, prompt });
+      doGenerateCode({
+        conversation_id: res.conversation_id,
+        prompt: "Generate code for the above Flex Spec.",
+      });
     },
     onError: () => {
       setIsGenerating(false);
@@ -44,7 +67,7 @@ export default function Home() {
     },
   });
 
-  // 2) Generate code
+  // 3) Generate code
   const { mutate: doGenerateCode } = useMutation(generateCode, {
     onSuccess: (data) => {
       setCodeData(data.generated_code);
@@ -56,7 +79,7 @@ export default function Home() {
     },
   });
 
-  // 3) Start deployment
+  // 4) Start deployment
   const { mutate: doStartDeploy } = useMutation(startDeployment, {
     onSuccess: (res) => {
       setDeploymentId(res.deployment_id);
@@ -69,37 +92,87 @@ export default function Home() {
   });
 
   const handleSubmitPrompt = () => {
+    setIsGenerating(true);
     setCodeData(null);
     setDeploymentId(null);
     setConversationId(null);
-    setIsGenerating(true);
 
-    doStartConversation({ messages: [{ role: "user", content: prompt }] });
+    doTransformSpec({ userIdea });
   };
 
   const handleStartDeployment = () => {
     if (!conversationId) {
-      alert("Generate code first (Conversation ID not found).");
+      alert("No conversation found. Generate code first.");
       return;
     }
-    console.log("Starting deployment with conversationId:", conversationId);
     setIsDeploying(true);
+
     doStartDeploy({
       conversation_id: conversationId,
-      app_name: "my-python-app",
+      app_name: "flex-fastapi-app",
       max_iterations: maxIterations,
-      app_type: appType,
+      port_number: flexPort,
+      trouble_mode: troubleMode,
+      persist_on_success: persistOnSuccess, // NEW
     });
   };
 
   return (
     <Box p={4}>
+      <Text fontSize="lg" mb={2}>
+        Enter your microservice idea in plain English:
+      </Text>
       <Textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Describe your app idea..."
+        value={userIdea}
+        onChange={(e) => setUserIdea(e.target.value)}
+        placeholder="e.g., 'A service on port 9090 with a GET /random endpoint for random numbers...'"
+        mb={2}
       />
-      <Button mt={2} onClick={handleSubmitPrompt} colorScheme="blue">
+
+      <Flex align="center" mb={4}>
+        <Text mr={2}>Port Number:</Text>
+        <Input
+          type="number"
+          width="100px"
+          value={flexPort}
+          onChange={(e) => setFlexPort(e.target.value)}
+        />
+      </Flex>
+
+      <Flex align="center" mb={4}>
+        <Text mr={2}>Max Iterations:</Text>
+        <Input
+          type="number"
+          width="100px"
+          value={maxIterations}
+          onChange={(e) => setMaxIterations(e.target.value)}
+        />
+      </Flex>
+
+      {/* Trouble mode */}
+      <Checkbox
+        isChecked={troubleMode}
+        onChange={(e) => setTroubleMode(e.target.checked)}
+        mb={4}
+      >
+        Trouble Mode (Leave Container Running on Failure)
+      </Checkbox>
+
+      {/* Persist on success */}
+      <Checkbox
+        isChecked={persistOnSuccess}
+        onChange={(e) => setPersistOnSuccess(e.target.checked)}
+        mb={4}
+        ml={4}
+      >
+        Keep Container Running on Success
+      </Checkbox>
+
+      <Button
+        onClick={handleSubmitPrompt}
+        colorScheme="blue"
+        isLoading={isTransformLoading || isGenerating}
+      >
         Generate Code
       </Button>
 
@@ -109,28 +182,6 @@ export default function Home() {
           <Text>Generating code, please wait...</Text>
         </Flex>
       )}
-
-      <Flex align="center" mt={4}>
-        <Text mr={2}>Max Iterations:</Text>
-        <Input
-          type="number"
-          width="100px"
-          value={maxIterations}
-          onChange={(e) => setMaxIterations(Number(e.target.value))}
-        />
-      </Flex>
-
-      <Flex align="center" mt={4}>
-        <Text mr={2}>App Type:</Text>
-        <Select
-          width="150px"
-          value={appType}
-          onChange={(e) => setAppType(e.target.value)}
-        >
-          <option value="script">Short Script</option>
-          <option value="server">Long-Running Server</option>
-        </Select>
-      </Flex>
 
       {codeData && (
         <Box mt={4} p={4} bg="gray.700" color="white">
@@ -143,7 +194,7 @@ export default function Home() {
           {isDeploying && (
             <Flex mt={2} align="center">
               <Spinner mr={2} />
-              <Text>Starting deployment...</Text>
+              <Text>Deploying...</Text>
             </Flex>
           )}
         </Box>

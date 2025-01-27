@@ -1,58 +1,43 @@
-# Backend Documentation
+# Backend Documentation (Text to Flex)
 
 ## 1. Overview
-A FastAPI-based service that handles:
-- Code generation requests
-- Deployments
-- Real-time logging
-- Authentication and role-based access
+Backend is a FastAPI application that:
+1. Transforms user text into a “Flex Spec.”
+2. Generates FastAPI microservice code from that spec.
+3. Deploys the container, checks logs, and fixes code if needed.
+4. Stores conversation history, user accounts, and deployment data.
 
-## 2. Framework & Language
-- Python 3, FastAPI, Pydantic for data validation.
-- Uvicorn or Gunicorn for ASGI hosting.
+## 2. Core Components
+- **/auth**: Login, token creation.
+- **/users**: User CRUD (admin only).
+- **/conversations**: Store conversation messages and specs.
+- **/ai**:
+  - `POST /ai/transform_flex_spec` → transform raw text into a structured spec.
+  - `POST /ai/generate` → initial code generation from the conversation or spec.
+- **/deployments**: Start the orchestrator pipeline, watch logs, track status.
+- **/ws**: WebSocket endpoints for real-time logs streaming.
 
-## 3. Database
-- MongoDB via PyMongo or Motor (async).
-- Collections for users, conversations, deployments, etc.
+## 3. Database (MongoDB)
+- `users`: user accounts (email, role, hashed_password).
+- `conversations`: messages, final specs, timestamps.
+- `deployments`: status, logs, container iteration data.
 
-## 4. Authentication & Authorization
-- Okta SSO for primary logins, with local user fallback for testing/admin.
-- Role-based access (Administrator, User) enforced at route level.
-
-## 5. API Design (RESTful)
-1. **/auth**: login (local), Okta callbacks, logout
-2. **/users**: manage user accounts (admin only), get current user
-3. **/conversations**: create chat sessions, add messages
-4. **/deployments**: trigger app deployment, view status/logs
-5. **/ai**: orchestrates code generation with on-prem or cloud models
-
-## 6. On-Prem & Cloud AI Integration
-- **On-Prem (Ollama)**:
-  - Models (examples):
-    - hhao/qwen2.5-coder-tools:32b
-    - llama3.2-vision:11b-instruct-q8_0
-    - etc.
-  - Typically hosted at http://10.60.4.77:11434 or http://10.60.4.78:11434
-  - 64000 context length, 60000 max tokens.
-- **Cloud (OpenAI)**:
-  - Accessed via platform.openai.com or the official OpenAI Python library.
-  - Use different models depending on cost/performance (e.g. GPT-4, GPT-3.5).
-
-## 7. Deployment & DevOps
+## 4. DevOps & Infrastructure
 - Docker-based container for FastAPI.
-- Flux CD (GitOps) for k3s environment.
-- Sealed secrets for storing credentials (Okta secrets, AI keys).
+- Docker Compose for local dev with MongoDB.
+- Optionally K8s for production scaling.
+- On-prem AI (Ollama) or OpenAI calls for transformation and code generation.
 
-## 8. Real-Time Logs
-- SSE or WebSocket endpoints (e.g., /deployments/{id}/logs/stream).
-- Streams code generation status, build logs, error messages.
+## 5. Iterative Deployment
+The “orchestrator” logic in `app/api/orchestrator.py`:
+1. Build Docker image from generated code.
+2. Run container on the user’s chosen port.
+3. If container fails or times out, parse logs, feed them back to the LLM for a fix.
+4. Repeat until success or max iterations reached.
 
-## 9. Security & Compliance
-- SSL/TLS for external communication.
-- Strict role checks for admin operations.
-- Rate limiting or usage quotas for AI endpoints to control costs.
+## 6. Security & Logging
+- JWT tokens for auth, role checks in each route.
+- WebSocket logs broadcast real-time from the orchestrator to the frontend.
 
-## 10. Summary & Next Steps
-- Backend can switch between on-prem and cloud AI providers for code generation.
-- Set up environment variables or a config file for each provider’s base URL and API key.
-- Integrate SSE or WebSockets into the frontend for live logs.
+## 7. Summary
+The backend orchestrates the entire flow, from receiving user input to handing off a running container. It leverages LLM calls for spec transformation and code generation, storing everything in MongoDB for historical tracking.

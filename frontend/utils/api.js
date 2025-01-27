@@ -1,12 +1,11 @@
 // File: frontend/utils/api.js
+
 import axios from "axios";
 
-// Adjust baseURL for your environment
 const apiClient = axios.create({
   baseURL: "http://localhost:8000",
 });
 
-// Optional: token interceptor if you use localStorage
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem("access_token");
   if (token) {
@@ -15,53 +14,57 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// ----------------------
-// Auth: loginUser
-// ----------------------
+// --- Transform to Flex Spec ---
+export async function transformFlexSpec(payload) {
+  // payload = { userIdea: string }
+  const { data } = await apiClient.post("/ai/transform_flex_spec", payload);
+  return data;
+}
+
+// --- Auth: login ---
 export async function loginUser(payload) {
-  // payload = { email, password }
   const { data } = await apiClient.post("/auth/login", payload);
-  return data; // { access_token, token_type }
+  return data;
 }
 
-// ----------------------
-// Auth: createNewUser (for signup)
-// ----------------------
+// --- Auth: create user ---
 export async function createNewUser(payload) {
-  // payload = { username, email, role, password }
   const { data } = await apiClient.post("/users", payload);
-  return data; // { id, email }
+  return data;
 }
 
-// ----------------------
-// Conversations
-// ----------------------
+// --- Conversations ---
 export async function createConversation(payload) {
-  // e.g. payload = { messages: [ { role: "user", content: prompt } ] }
   const { data } = await apiClient.post("/conversations", payload);
-  return data; // { conversation_id }
+  return data;
 }
 
 export async function getConversations() {
-  // For listing conversation history
   const { data } = await apiClient.get("/conversations");
-  return data; // Array of conversation objects
+  return data;
 }
 
-// ----------------------
-// AI code generation
-// ----------------------
+// --- AI code generation ---
 export async function generateCode(payload) {
   // payload = { conversation_id, prompt }
   const { data } = await apiClient.post("/ai/generate", payload);
-  return data; // { generated_code }
+  return data;
 }
 
-// ----------------------
-// Deployments
-// ----------------------
+// --- Deployments ---
 export async function startDeployment(payload) {
-  // payload = { conversation_id, app_name, max_iterations, app_type }
+  // payload includes: conversation_id, app_name, max_iterations, port_number, trouble_mode
   const { data } = await apiClient.post("/deployments/start", payload);
-  return data; // { deployment_id, status }
+  return data;
+}
+
+export async function getRunningServices() {
+  const { data } = await apiClient.get("/deployments/running-services");
+  return data;
+}
+
+export async function stopService(payload) {
+  // payload = { deployment_id }
+  const { data } = await apiClient.post("/deployments/stop", payload);
+  return data;
 }
