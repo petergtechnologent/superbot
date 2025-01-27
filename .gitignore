@@ -1,2 +1,4 @@
 *.env
 *.yml
+dumper.sh
+project_dump.txt

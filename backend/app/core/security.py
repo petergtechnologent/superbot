@@ -1,31 +1,28 @@
+# File: backend/app/core/security.py
 import logging
 from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 import jwt
-from app.core.config import JWT_SECRET_KEY, JWT_ALGORITHM
 from datetime import datetime, timedelta
 
+from app.core.config import JWT_SECRET_KEY, JWT_ALGORITHM, DEV_MODE
 logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
-
 def verify_password(plain_pass: str, hashed_pass: str) -> bool:
     return pwd_context.verify(plain_pass, hashed_pass)
-
 
 def create_jwt_token(data: dict, expires_delta: int = 3600):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(seconds=expires_delta)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-
 
 def decode_jwt_token(token: str):
     logger.debug(f"[decode_jwt_token] Attempting to decode token: {token}")
@@ -43,12 +40,19 @@ def decode_jwt_token(token: str):
     except jwt.DecodeError:
         logger.debug("[decode_jwt_token] Token decode error. Invalid signature.")
         return None
-    except Exception as e:
+    except Exception:
         logger.exception("[decode_jwt_token] Unexpected error decoding token.")
         return None
 
-
 async def get_current_user(token: str = Depends(oauth2_scheme)):
+    """
+    If DEV_MODE=True, return a dummy "admin" user to bypass auth.
+    Otherwise, decode the real JWT token from the request.
+    """
+    if DEV_MODE:
+        logger.debug("[get_current_user] DEV_MODE enabled. Skipping auth.")
+        return {"user_id": "dev_user", "role": "admin", "email": "dev@example.com"}
+
     logger.debug(f"[get_current_user] Received token via OAuth2: {token}")
     payload = decode_jwt_token(token)
     if not payload:
@@ -60,8 +64,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     logger.debug(f"[get_current_user] Decoded user payload: {payload}")
     return payload
 
-
 def require_role(role: str):
+    """
+    This depends on get_current_user. If DEV_MODE=True, user is effectively admin.
+    Otherwise we do the normal role checks.
+    """
     def role_decorator(user=Depends(get_current_user)):
         user_role = user.get("role")
         logger.debug(f"[require_role] Required: {role}, user has role: {user_role}")
@@ -69,7 +76,6 @@ def require_role(role: str):
         if role == "admin" and user_role != "admin":
             raise HTTPException(status_code=403, detail="Forbidden")
         elif role == "user" and user_role not in ("user", "admin"):
-            # If we specifically need role="user", an admin is also accepted. If your logic differs, adjust here.
             raise HTTPException(status_code=403, detail="Forbidden")
 
         return user

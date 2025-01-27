@@ -4,7 +4,8 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from app.core.database import db
 from app.core.security import hash_password
-from app.api import auth, users, conversations, deployments, ai
+from app.api import auth, users, conversations, ai, deployments
+from app.api.ws import ws_router  # NEW import for websockets
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 logging.basicConfig(
@@ -14,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# QUIET noisy libraries at or above ERROR:
+# QUIET noisy libraries
 logging.getLogger("pymongo").setLevel(logging.ERROR)
 logging.getLogger("passlib").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
@@ -28,16 +29,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include your existing routers
+# Include routers
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(conversations.router, prefix="/conversations", tags=["Conversations"])
 app.include_router(deployments.router, prefix="/deployments", tags=["Deployments"])
 app.include_router(ai.router, prefix="/ai", tags=["AI"])
+app.include_router(ws_router)  # Add the websocket router
 
 @app.on_event("startup")
 async def seed_first_admin():
-    # same logic as before
+    """
+    Seeds a first-time admin if environment variables are set.
+    (Same logic you originally had.)
+    """
     first_admin_email = os.getenv("FIRST_ADMIN_EMAIL")
     first_admin_username = os.getenv("FIRST_ADMIN_USERNAME")
     first_admin_password = os.getenv("FIRST_ADMIN_PASSWORD")
