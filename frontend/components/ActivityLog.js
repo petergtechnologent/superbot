@@ -1,6 +1,13 @@
 // File: frontend/components/ActivityLog.js
 import { useEffect, useState } from "react";
-import { Box, Text, useColorModeValue } from "@chakra-ui/react";
+import {
+  Box,
+  Text,
+  useColorModeValue,
+  Divider,
+  chakra,
+} from "@chakra-ui/react";
+import { CheckCircleIcon } from "@chakra-ui/icons";
 
 export default function ActivityLog({ deploymentId }) {
   const [logs, setLogs] = useState([]);
@@ -40,16 +47,43 @@ export default function ActivityLog({ deploymentId }) {
         Deployment Logs (ID: {deploymentId}):
       </Text>
       {logs.map((log, idx) => {
-        // Check if this line starts with "AI Plan" to highlight it
-        if (log.trim().startsWith("AI Plan")) {
+        const trimmed = log.trim();
+
+        // Highlight iteration lines
+        if (trimmed.includes("Iteration #")) {
+          return (
+            <Box key={idx} my={4}>
+              <Divider borderColor="gray.500" mb={2} />
+              <Text fontWeight="bold" color="teal.300">
+                {log}
+              </Text>
+              <Divider borderColor="gray.500" mt={2} />
+            </Box>
+          );
+        }
+
+        // Show green check for SUCCESS lines
+        if (trimmed.toUpperCase().includes("SUCCESS")) {
+          return (
+            <Box key={idx} my={2} display="flex" alignItems="center" color="green.400">
+              <CheckCircleIcon mr={2} />
+              <Text fontWeight="bold">{log}</Text>
+            </Box>
+          );
+        }
+
+        // Special highlight if line starts with "AI Plan" (existing logic example)
+        if (trimmed.startsWith("AI Plan")) {
           return (
             <Text key={idx} fontSize="sm" fontWeight="bold" color="orange.300">
               {log}
             </Text>
           );
         }
+
+        // Default log line
         return (
-          <Text key={idx} fontSize="sm">
+          <Text key={idx} fontSize="sm" my={1}>
             {log}
           </Text>
         );

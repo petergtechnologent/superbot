@@ -1,6 +1,7 @@
 // File: frontend/pages/index.js
 import { useState } from "react";
 import { useMutation } from "react-query";
+import Head from "next/head";
 import {
   Box,
   Button,
@@ -10,6 +11,7 @@ import {
   Flex,
   Spinner,
   Checkbox,
+  Heading,
 } from "@chakra-ui/react";
 import {
   transformFlexSpec,
@@ -24,8 +26,6 @@ export default function Home() {
   const [flexPort, setFlexPort] = useState("9000");
   const [maxIterations, setMaxIterations] = useState(5);
   const [troubleMode, setTroubleMode] = useState(false);
-
-  // We no longer keep "persistOnSuccess" since containers should remain running by default.
 
   const [conversationId, setConversationId] = useState(null);
   const [deploymentId, setDeploymentId] = useState(null);
@@ -114,20 +114,25 @@ export default function Home() {
       max_iterations: maxIterations,
       port_number: flexPort,
       trouble_mode: troubleMode,
-      // Removed persist_on_success
     });
   };
 
   return (
     <Box p={4}>
-      <Text fontSize="lg" mb={2}>
-        Enter your microservice idea in plain English:
+      <Head>
+        <title>Fast Service Generator</title>
+      </Head>
+
+      <Heading mb={4}>Fast Service Generator</Heading>
+
+      <Text fontSize="md" mb={2}>
+        Enter your microservice need:
       </Text>
       <Textarea
         value={userIdea}
         onChange={(e) => setUserIdea(e.target.value)}
         placeholder="e.g., 'A service on port 9090 with a GET /random endpoint for random numbers...'"
-        mb={2}
+        mb={4}
       />
 
       <Flex align="center" mb={4}>
@@ -159,12 +164,11 @@ export default function Home() {
         Trouble Mode (Leave Container Running on Failure)
       </Checkbox>
 
-      {/* Removed the "Keep Container Running on Success" checkbox */}
-      
       <Button
         onClick={handleSubmitPrompt}
         colorScheme="blue"
         isLoading={isTransformLoading || isGenerating}
+        mb={6}
       >
         Generate Code
       </Button>
@@ -176,21 +180,31 @@ export default function Home() {
         </Flex>
       )}
 
+      {/* SERVICE SPEC TEXT */}
       {codeData && (
         <Box mt={4} p={4} bg="gray.700" color="white">
-          <Text fontWeight="bold">Generated Code:</Text>
+          <Text fontWeight="bold">Service Spec:</Text>
           <pre>{codeData}</pre>
-
-          <Button mt={4} onClick={handleStartDeployment} colorScheme="orange">
-            Start Automated Deployment
-          </Button>
-          {isDeploying && (
-            <Flex mt={2} align="center">
-              <Spinner mr={2} />
-              <Text>Deploying...</Text>
-            </Flex>
-          )}
         </Box>
+      )}
+
+      {/* START DEPLOYMENT BUTTON (moved out of the code box) */}
+      {codeData && (
+        <Button
+          mt={2}
+          onClick={handleStartDeployment}
+          colorScheme="orange"
+          isLoading={isDeploying}
+        >
+          Start Automated Deployment
+        </Button>
+      )}
+
+      {isDeploying && (
+        <Flex mt={2} align="center">
+          <Spinner mr={2} />
+          <Text>Deploying...</Text>
+        </Flex>
       )}
 
       {deploymentId && (
