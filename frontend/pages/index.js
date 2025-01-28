@@ -22,72 +22,6 @@ import {
 } from "../utils/api";
 import ActivityLog from "../components/ActivityLog";
 
-// Helper component to parse and nicely display generated files.
-function GeneratedFilesDisplay({ codeData }) {
-  const [parsed, setParsed] = useState(null);
-
-  // Try to parse once on load
-  if (parsed === null) {
-    try {
-      setParsed(JSON.parse(codeData));
-    } catch (err) {
-      // If it's not valid JSON, store null and fallback to raw
-      setParsed(false);
-    }
-  }
-
-  // If parse failed, just show the raw code
-  if (parsed === false) {
-    return (
-      <Box p={4} bg="gray.700" color="white">
-        <Text fontWeight="bold" mb={2}>
-          Service Spec (Raw):
-        </Text>
-        <pre>{codeData}</pre>
-      </Box>
-    );
-  }
-
-  // If we have an object, show each file in its own box
-  if (parsed && typeof parsed === "object") {
-    return (
-      <Box>
-        <Text fontWeight="bold" mb={2}>
-          Generated Files:
-        </Text>
-        {Object.entries(parsed).map(([filename, content]) => (
-          <Box
-            key={filename}
-            mt={3}
-            p={3}
-            bg="gray.700"
-            borderRadius="md"
-            color="white"
-          >
-            <Text fontWeight="semibold" mb={1}>
-              {filename}
-            </Text>
-            <Box
-              bg="gray.900"
-              p={2}
-              borderRadius="md"
-              maxH="300px"
-              overflowY="auto"
-            >
-              <pre style={{ whiteSpace: "pre-wrap", wordWrap: "break-word" }}>
-                {content}
-              </pre>
-            </Box>
-          </Box>
-        ))}
-      </Box>
-    );
-  }
-
-  // If no codeData yet or still in process, return null
-  return null;
-}
-
 export default function Home() {
   const toast = useToast();
   const [userIdea, setUserIdea] = useState("");
@@ -206,7 +140,6 @@ export default function Home() {
     }
     setIsDeploying(true);
 
-    // Generate a unique suffix for the app name
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const uniqueAppName = `flex-fastapi-app-${randomSuffix}`;
 
@@ -214,7 +147,7 @@ export default function Home() {
       conversation_id: conversationId,
       app_name: uniqueAppName,
       max_iterations: maxIterations,
-      port_number: flexPort,
+      port_number: parseInt(flexPort, 10) || 9000,
       trouble_mode: troubleMode,
     });
   };
@@ -233,7 +166,7 @@ export default function Home() {
       <Textarea
         value={userIdea}
         onChange={(e) => setUserIdea(e.target.value)}
-        placeholder="e.g., 'A service on port 9090 with a GET /random endpoint for random numbers...'"
+        placeholder="e.g., 'A service on port 9090 with a GET /random endpoint...'"
         mb={4}
       />
 
@@ -257,7 +190,6 @@ export default function Home() {
         />
       </Flex>
 
-      {/* Trouble mode */}
       <Checkbox
         isChecked={troubleMode}
         onChange={(e) => setTroubleMode(e.target.checked)}
@@ -311,4 +243,65 @@ export default function Home() {
       )}
     </Box>
   );
+}
+
+// Helper component for file display
+function GeneratedFilesDisplay({ codeData }) {
+  const [parsed, setParsed] = useState(null);
+
+  if (parsed === null) {
+    try {
+      setParsed(JSON.parse(codeData));
+    } catch (err) {
+      setParsed(false);
+    }
+  }
+
+  if (parsed === false) {
+    return (
+      <Box p={4} bg="gray.700" color="white">
+        <Text fontWeight="bold" mb={2}>
+          Service Spec (Raw):
+        </Text>
+        <pre>{codeData}</pre>
+      </Box>
+    );
+  }
+
+  if (parsed && typeof parsed === "object") {
+    return (
+      <Box>
+        <Text fontWeight="bold" mb={2}>
+          Generated Files:
+        </Text>
+        {Object.entries(parsed).map(([filename, content]) => (
+          <Box
+            key={filename}
+            mt={3}
+            p={3}
+            bg="gray.700"
+            borderRadius="md"
+            color="white"
+          >
+            <Text fontWeight="semibold" mb={1}>
+              {filename}
+            </Text>
+            <Box
+              bg="gray.900"
+              p={2}
+              borderRadius="md"
+              maxH="300px"
+              overflowY="auto"
+            >
+              <pre style={{ whiteSpace: "pre-wrap", wordWrap: "break-word" }}>
+                {content}
+              </pre>
+            </Box>
+          </Box>
+        ))}
+      </Box>
+    );
+  }
+
+  return null;
 }

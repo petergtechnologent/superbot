@@ -36,6 +36,9 @@ export default function Layout({ children }) {
           <Link as={NextLink} href="/">
             Home
           </Link>
+          <Link as={NextLink} href="/wizard">
+            Wizard
+          </Link>
           <Link as={NextLink} href="/history">
             History
           </Link>
@@ -52,7 +55,12 @@ export default function Layout({ children }) {
               </Link>
             </>
           ) : (
-            <Button onClick={handleLogout} colorScheme="red" variant="outline" size="sm">
+            <Button
+              onClick={handleLogout}
+              colorScheme="red"
+              variant="outline"
+              size="sm"
+            >
               Logout
             </Button>
           )}
