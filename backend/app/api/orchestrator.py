@@ -22,12 +22,13 @@ logger = logging.getLogger(__name__)
 
 async def run_deployment_pipeline(deployment_id: str):
     """
-    Orchestrates:
+    Orchestrates the deployment pipeline:
       1. Generate or fix code
       2. Docker build ephemeral-test-image
-      3. Docker run ephemeral container in the same Docker network as 'backend'
-      4. Health check by calling http://{container_name}:{port}
-      5. If trouble_mode=False, remove container on failure. Otherwise keep it running.
+      3. Docker run ephemeral container
+      4. Health check
+      5. If trouble_mode=False and container fails, remove it and attempt fix. 
+         Otherwise, keep container on success or if trouble_mode is True on failure.
       6. Repeat until success or max_iterations
     """
     logger.debug(f"[Orchestrator] Starting pipeline for deployment {deployment_id}")
@@ -117,7 +118,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{target_port}"].
                 break
             continue
 
-        # 4) Docker run ephemeral container
+        # 4) Docker run ephemeral container & check
         run_ok, run_logs, container_id = await docker_run_server_check_host(
             deployment_id=deployment_id,
             port=target_port,
@@ -126,8 +127,15 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{target_port}"].
         await append_log(deployment_id, run_logs)
         last_logs = run_logs
 
-        if not run_ok:
+        if run_ok:
+            # Mark container as running in DB so user can stop it later
+            await update_deployment_field(deployment_id, {"container_id": container_id})
+            await append_log(deployment_id, f"Service is accessible on port {target_port}. SUCCESS!")
+            await update_deployment_field(deployment_id, {"status": "success"})
+            break
+        else:
             if trouble_mode:
+                # user wants to keep container even if it fails
                 await append_log(
                     deployment_id,
                     f"Trouble mode is ON: Container {container_id} left running for debugging."
@@ -139,11 +147,6 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{target_port}"].
                 if not fix_ok:
                     break
                 continue
-
-        # success
-        await append_log(deployment_id, f"Service is accessible on port {target_port}. SUCCESS!")
-        await update_deployment_field(deployment_id, {"status": "success"})
-        break
 
     shutil.rmtree(build_dir, ignore_errors=True)
 
@@ -167,22 +170,22 @@ async def docker_build(build_dir: str):
 async def docker_run_server_check_host(deployment_id: str, port: int, trouble_mode: bool):
     """
     1) Create a container name = ephemeral-test-container-{deployment_id}.
-    2) Run ephemeral-test-image in the same Docker network as 'backend' (superbot_default),
-       but also publish the port to the host (so you can access it at http://localhost:<port>).
-    3) Wait 12s, then call http://{container_name}:{port} from inside the docker network.
+    2) Run ephemeral-test-image in the same Docker network as 'backend',
+       with '-p {port}:{port}' so it's accessible at localhost:{port}.
+    3) Wait ~12s, then call http://{container_name}:{port}/
     4) If container fails or times out, remove it unless trouble_mode=True.
+    5) Return (run_ok, logs, container_id).
     """
     container_name = f"ephemeral-test-container-{deployment_id}"
 
-    # First remove any old container with the same name, if it exists
+    # First remove any old container with the same name
     rm_old = f"docker rm -f {container_name}"
     await asyncio.create_subprocess_shell(rm_old)
 
-    # IMPORTANT CHANGE: add -p {port}:{port} for external access
     run_cmd = (
         f"docker run -d --name {container_name} "
         f"--network=superbot_default "
-        f"-p {port}:{port} "  # <--- This ensures you can access it from host at localhost:<port>
+        f"-p {port}:{port} "
         "ephemeral-test-image"
     )
 
@@ -216,6 +219,7 @@ async def docker_run_server_check_host(deployment_id: str, port: int, trouble_mo
     if is_running != "true":
         msg = f"Container exited unexpectedly.\n{logs_combined}"
         if not trouble_mode:
+            # remove it if it failed
             rm_cmd = f"docker rm -f {new_container_id}"
             await asyncio.create_subprocess_shell(rm_cmd)
         return (False, msg, new_container_id)
@@ -225,13 +229,8 @@ async def docker_run_server_check_host(deployment_id: str, port: int, trouble_mo
         url = f"http://{container_name}:{port}/"
         resp = requests.get(url, timeout=4)
         if resp.status_code == 200:
-            # success => remove container if not trouble_mode
-            rm_msg = ""
-            if not trouble_mode:
-                rm_cmd = f"docker rm -f {new_container_id}"
-                await asyncio.create_subprocess_shell(rm_cmd)
-                rm_msg = f"Removed container {new_container_id} after success.\n"
-            return (True, f"{rm_msg}HTTP 200 OK on {url}\n{logs_combined}", new_container_id)
+            # Container stays running on success
+            return (True, f"HTTP 200 OK on {url}\n{logs_combined}", new_container_id)
         else:
             msg = f"Service returned {resp.status_code} at {url}\n{logs_combined}"
             if not trouble_mode:

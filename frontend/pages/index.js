@@ -24,7 +24,8 @@ export default function Home() {
   const [flexPort, setFlexPort] = useState("9000");
   const [maxIterations, setMaxIterations] = useState(5);
   const [troubleMode, setTroubleMode] = useState(false);
-  const [persistOnSuccess, setPersistOnSuccess] = useState(false); // NEW
+
+  // We no longer keep "persistOnSuccess" since containers should remain running by default.
 
   const [conversationId, setConversationId] = useState(null);
   const [deploymentId, setDeploymentId] = useState(null);
@@ -113,7 +114,7 @@ export default function Home() {
       max_iterations: maxIterations,
       port_number: flexPort,
       trouble_mode: troubleMode,
-      persist_on_success: persistOnSuccess, // NEW
+      // Removed persist_on_success
     });
   };
 
@@ -158,16 +159,8 @@ export default function Home() {
         Trouble Mode (Leave Container Running on Failure)
       </Checkbox>
 
-      {/* Persist on success */}
-      <Checkbox
-        isChecked={persistOnSuccess}
-        onChange={(e) => setPersistOnSuccess(e.target.checked)}
-        mb={4}
-        ml={4}
-      >
-        Keep Container Running on Success
-      </Checkbox>
-
+      {/* Removed the "Keep Container Running on Success" checkbox */}
+      
       <Button
         onClick={handleSubmitPrompt}
         colorScheme="blue"
