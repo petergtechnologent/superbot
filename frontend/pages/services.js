@@ -69,7 +69,12 @@ export default function Services() {
         data.map((dep) => (
           <Box key={dep._id} p={4} my={2} bg="gray.700">
             <Text>Deployment ID: {dep._id}</Text>
-            <Text>App Name: {dep.app_name}</Text>
+            <Text>
+              App Name:{" "}
+              <Text as="span" fontWeight="bold" color="orange.300">
+                {dep.app_name}
+              </Text>
+            </Text>
             <Text>Status: {dep.status}</Text>
             <Text>Port: {dep.port_number}</Text>
             <Text>Container ID: {dep.container_id}</Text>

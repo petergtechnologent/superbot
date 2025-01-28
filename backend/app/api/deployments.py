@@ -18,8 +18,6 @@ class DeploymentStartRequest(BaseModel):
     max_iterations: int = 5
     port_number: int = 9000
     trouble_mode: bool = False
-    # Removed persist_on_success
-
 
 @router.post("/start")
 async def start_deployment(
@@ -30,7 +28,7 @@ async def start_deployment(
     """
     Creates a deployment record, spawns the orchestrator in background.
     trouble_mode: leave container running if it fails (for debugging).
-    Containers also now remain running by default on success.
+    Containers also remain running on success by default.
     """
     deployment_doc = {
         "conversation_id": req.conversation_id,
@@ -43,16 +41,14 @@ async def start_deployment(
         "updated_at": datetime.utcnow(),
         "port_number": req.port_number,
         "trouble_mode": req.trouble_mode,
-        # Removed "persist_on_success": ...
         "container_id": None,
-        "user_id": user["user_id"]  # track which user started it
+        "user_id": user["user_id"]
     }
 
     result = await db["deployments"].insert_one(deployment_doc)
     deployment_id = str(result.inserted_id)
     background_tasks.add_task(run_deployment_pipeline, deployment_id)
     return {"deployment_id": deployment_id, "status": "started"}
-
 
 @router.get("/{deployment_id}/status")
 async def get_deployment_status(deployment_id: str, user=Depends(require_role("user"))):
@@ -71,10 +67,8 @@ async def get_deployment_status(deployment_id: str, user=Depends(require_role("u
         "max_iterations": doc.get("max_iterations"),
         "port_number": doc.get("port_number"),
         "trouble_mode": doc.get("trouble_mode", False),
-        # Removed "persist_on_success": doc.get("persist_on_success", False),
         "container_id": doc.get("container_id"),
     }
-
 
 @router.get("/running-services")
 async def list_running_services(user=Depends(require_role("user"))):
@@ -90,17 +84,13 @@ async def list_running_services(user=Depends(require_role("user"))):
     results = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
-        # hide logs for brevity
         doc.pop("logs", None)
-        # Removed doc.pop("persist_on_success", None)
         results.append(doc)
 
     return results
 
-
 class StopServiceRequest(BaseModel):
     deployment_id: str
-
 
 @router.post("/stop")
 async def stop_running_service(req: StopServiceRequest, user=Depends(require_role("user"))):

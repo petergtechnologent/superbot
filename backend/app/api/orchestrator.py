@@ -5,14 +5,12 @@ import shutil
 import uuid
 import asyncio
 import logging
-import random
 import requests
 from datetime import datetime
 from bson import ObjectId
 
 from app.core.database import db
 from app.api.ai import (
-    call_ai_for_plan,
     call_ai_for_code_with_raw,
     fix_code_with_logs
 )
@@ -27,8 +25,8 @@ async def run_deployment_pipeline(deployment_id: str):
       2. Docker build ephemeral-test-image
       3. Docker run ephemeral container
       4. Health check
-      5. If trouble_mode=False and container fails, remove it and attempt fix. 
-         Otherwise, keep container on success or if trouble_mode is True on failure.
+      5. If trouble_mode=False and container fails, remove it and attempt fix.
+         Otherwise, keep container on success or if trouble_mode=True on failure.
       6. Repeat until success or max_iterations
     """
     logger.debug(f"[Orchestrator] Starting pipeline for deployment {deployment_id}")
@@ -166,7 +164,6 @@ async def docker_build(build_dir: str):
     logs = stdout.decode() + "\n" + stderr.decode()
     return (rc == 0), f"Build Logs:\n{logs}"
 
-
 async def docker_run_server_check_host(deployment_id: str, port: int, trouble_mode: bool):
     """
     1) Create a container name = ephemeral-test-container-{deployment_id}.
@@ -244,7 +241,6 @@ async def docker_run_server_check_host(deployment_id: str, port: int, trouble_mo
             await asyncio.create_subprocess_shell(rm_cmd)
         return (False, msg, new_container_id)
 
-
 async def _grab_container_logs(container_id: str) -> str:
     logs_cmd = f"docker logs {container_id}"
     proc_logs = await asyncio.create_subprocess_shell(
@@ -253,7 +249,6 @@ async def _grab_container_logs(container_id: str) -> str:
     logs_out, logs_err = await proc_logs.communicate()
     combined = logs_out.decode(errors="replace") + logs_err.decode(errors="replace")
     return combined.strip()
-
 
 def write_code_to_directory(code_snippets: dict, build_dir: str):
     import shutil
@@ -264,7 +259,6 @@ def write_code_to_directory(code_snippets: dict, build_dir: str):
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
-
 
 async def append_log(deployment_id: str, new_log: str):
     logger.info(f"[Deployment {deployment_id}] {new_log}")
@@ -277,7 +271,6 @@ async def append_log(deployment_id: str, new_log: str):
         }
     )
     await broadcast_log(deployment_id, new_log)
-
 
 async def update_deployment_field(deployment_id: str, fields: dict):
     from datetime import datetime

@@ -18,16 +18,16 @@ from app.api.conversations import add_message_to_conversation_internal
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ------------------------------------------
+# --------------------------------------------------
 # 1) Transform user text -> Flex Spec
-# ------------------------------------------
+# --------------------------------------------------
 class TransformSpecRequest(BaseModel):
     userIdea: str
 
 @router.post("/transform_flex_spec")
 async def transform_flex_spec(request: TransformSpecRequest, user=Depends(require_role("user"))):
     """
-    Takes a freeform user idea (request.userIdea) and uses the LLM 
+    Takes a freeform user idea (request.userIdea) and uses the LLM
     to produce a structured Flex Spec with keys like:
     {
       "service_name": "...",
@@ -37,15 +37,15 @@ async def transform_flex_spec(request: TransformSpecRequest, user=Depends(requir
       ]
     }
 
-    We then ensure there's a root GET '/' endpoint for health checks.
+    Ensures there is a root GET '/' endpoint for health checks.
     """
     user_text = request.userIdea.strip()
     if not user_text:
         raise HTTPException(400, "Empty user idea.")
 
     system_prompt = f"""
-You are an assistant that converts plain English microservice requests 
-into a structured JSON specification for a "Flex Spec." 
+You are an assistant that converts plain English microservice requests
+into a structured JSON specification for a "Flex Spec."
 Output only valid JSON with keys:
 - service_name (string)
 - port (number)
@@ -93,9 +93,7 @@ Example minimal output:
         spec_dict["endpoints"] = []
 
     # Check if there's already a root path '/'
-    has_root = any(
-        ep.get("path") == "/" for ep in spec_dict["endpoints"]
-    )
+    has_root = any(ep.get("path") == "/" for ep in spec_dict["endpoints"])
     if not has_root:
         spec_dict["endpoints"].append({
             "path": "/",
@@ -105,9 +103,9 @@ Example minimal output:
 
     return spec_dict
 
-# ------------------------------------------
+# --------------------------------------------------
 # 2) Multi-turn Code Generation Endpoint
-# ------------------------------------------
+# --------------------------------------------------
 class CodeGenRequest(BaseModel):
     conversation_id: str
     prompt: str
@@ -129,29 +127,28 @@ async def generate_code(req: CodeGenRequest, user=Depends(require_role("user")))
 
     conversation_messages = convo.get("messages", [])
 
-    # 2) We'll add a 'system' message instructing the model to produce code with a root route
+    # 2) Add a system message instructing the model to produce code
     system_msg = {
         "role": "system",
         "content": """
 You are a code generator. The user's conversation above includes a Flex spec.
-Produce a Dockerized FastAPI service. The spec always has a root path '/' 
+Produce a Dockerized FastAPI service. The spec always has a root path '/'
 for a health/status endpoint returning {"status":"ok"}.
 
 Output code in JSON format, e.g.:
 {
   "Dockerfile": "...",
   "requirements.txt": "...",
-  "main.py": "...",
-  ...
+  "main.py": "..."
 }
 No code fences or extra text.
 """
     }
 
-    # 3) We'll treat your final prompt as a "user" message
+    # 3) Treat the final user prompt as a "user" message
     final_user_msg = {"role": "user", "content": req.prompt}
 
-    # 4) Merge it all and do a multi-turn parse
+    # 4) Generate code
     code_dict, raw_attempts = await call_ai_for_code_with_raw(
         conversation_messages=conversation_messages,
         system_messages=[system_msg, final_user_msg]
@@ -170,21 +167,9 @@ No code fences or extra text.
     logger.info("Multi-turn code generation succeeded. Returning JSON code.")
     return {"generated_code": generated_text}
 
-# ------------------------------------------
+# --------------------------------------------------
 # 3) Functions used by Orchestrator
-# ------------------------------------------
-async def call_ai_for_plan(conversation_messages, system_prompt: str) -> str:
-    final_messages = [{"role": "system", "content": system_prompt}]
-    final_messages.extend(conversation_messages)
-
-    if AI_PROVIDER == "ollama":
-        raw_plan = await _ollama_generate_multiturn(final_messages)
-    else:
-        raw_plan = await _openai_generate_multiturn(final_messages)
-
-    return raw_plan.strip()
-
-
+# --------------------------------------------------
 async def call_ai_for_code_with_raw(
     conversation_messages: List[Dict[str, str]],
     system_messages: List[Dict[str, str]]
@@ -204,7 +189,7 @@ async def call_ai_for_code_with_raw(
     if code_dict_1:
         return (code_dict_1, [raw1])
 
-    # Attempt #2
+    # Attempt #2 (retry with a fix prompt)
     fix_prompt = f"""
 You returned invalid JSON for file mappings. Original:
 {raw1}
@@ -242,11 +227,8 @@ async def fix_code_with_logs(deployment_id: str, conversation_id: str, raw_logs:
             highlights.append(line)
 
     snippet = "\n".join(highlights)
-
     known_fixes = diagnose_common_errors(raw_logs)
-    extra_hint = ""
-    if known_fixes:
-        extra_hint = f"\nAdditionally, here's a known fix:\n{known_fixes}\n"
+    extra_hint = f"\nAdditionally, here's a known fix:\n{known_fixes}\n" if known_fixes else ""
 
     system_msg_for_logs = {
         "role": "system",
@@ -255,7 +237,7 @@ We encountered errors while building/running the container.
 Here are up to 300 lines of logs:
 {snippet}
 
-Please fix these issues and return COMPLETE code in valid JSON 
+Please fix these issues and return COMPLETE code in valid JSON
 (filename->content). No code fences.
 {extra_hint}
 """
@@ -291,12 +273,12 @@ Please fix these issues and return COMPLETE code in valid JSON
     await append_log(deployment_id, "AI returned a code fix. Will try again next iteration.")
     return True
 
-# ------------------------------------------
+# --------------------------------------------------
 # 4) Helper functions
-# ------------------------------------------
+# --------------------------------------------------
 ERROR_PATTERNS = {
     r"cannot import name 'url_quote' from 'werkzeug.urls'": """
-Your logs suggest a Flask/Werkzeug mismatch. 
+Your logs suggest a Flask/Werkzeug mismatch.
 Pin them as:
 requirements.txt:
 Flask==2.2.3
@@ -314,6 +296,8 @@ def _normalize_code_snippet(parsed: dict) -> dict:
     if not isinstance(parsed, dict):
         return {}
 
+    # Some LLMs might return special format (like function calls)
+    # Ensure we only return {filename: content} structure
     if "name" in parsed and "arguments" in parsed:
         args = parsed["arguments"]
         if "filename" in args and "content" in args:
@@ -344,44 +328,9 @@ def _strip_code_fences(text: str) -> str:
     text = re.sub(r'```$', '', text.strip())
     return text.strip()
 
-# ------------------------------------------
+# --------------------------------------------------
 # 5) Internal calls to Ollama/OpenAI
-# ------------------------------------------
-async def _generate_text_single(prompt: str) -> str:
-    if AI_PROVIDER == "ollama":
-        return await _ollama_generate(prompt)
-    elif AI_PROVIDER == "openai":
-        return await _openai_generate_single(prompt)
-    else:
-        raise HTTPException(500, f"Unknown AI_PROVIDER: {AI_PROVIDER}")
-
-async def _ollama_generate(prompt: str) -> str:
-    try:
-        resp = requests.post(
-            f"{OLLLAMA_HOST}/api/generate",
-            json={"model": AI_MODEL, "prompt": prompt, "stream": False},
-            timeout=30
-        )
-        if resp.status_code != 200:
-            raise HTTPException(500, f"Ollama generation failed: {resp.text}")
-        data = resp.json()
-        return data.get("response", "")
-    except Exception as e:
-        logger.exception("Error calling Ollama (single-turn).")
-        raise HTTPException(500, f"Ollama error: {str(e)}")
-
-async def _openai_generate_single(prompt: str) -> str:
-    openai.api_key = OPENAI_API_KEY
-    try:
-        completion = openai.ChatCompletion.create(
-            model=AI_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        logger.exception("Error calling OpenAI (single-turn).")
-        raise HTTPException(500, f"OpenAI generation error: {str(e)}")
-
+# --------------------------------------------------
 async def _ollama_generate_multiturn(messages: List[Dict[str, str]]) -> str:
     prompt_parts = []
     for m in messages:
